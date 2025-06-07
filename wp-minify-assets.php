@@ -37,13 +37,14 @@ class WP_Minify_Assets {
     public function __construct() {
         // Default options
         $this->options = array(
-            'minify_html' => false,
-            'minify_css' => true,
-            'minify_js' => true,
-            'exclude_css' => array(),
-            'exclude_js' => array(),
-            'enable_logging' => false
-        );
+    'minify_html' => false,
+    'minify_css' => true,
+    'minify_js' => true,
+    'exclude_css' => array(),
+    'exclude_js' => array(),
+    'enable_logging' => false,
+    'async_css' => false
+);
 
         // Load saved options
         $saved_options = get_option('wp_minify_assets_options');
@@ -127,13 +128,13 @@ class WP_Minify_Assets {
       
 
         add_settings_field(
-            'minify_css',
-            __('Minify CSS', 'wp-minify-assets'),
-            array($this, 'checkbox_field_render'),
-            'wp_minify_assets',
-            'wp_minify_assets_section',
-            array('name' => 'minify_css')
-        );
+    'async_css',
+    __('Load CSS Asynchronously', 'wp-minify-assets'),
+    array($this, 'checkbox_field_render'),
+    'wp_minify_assets',
+    'wp_minify_assets_section',
+    array('name' => 'async_css', 'description' => __('Use preload technique to load CSS asynchronously', 'wp-minify-assets'))
+);
 
         add_settings_field(
             'minify_js',
@@ -196,6 +197,12 @@ class WP_Minify_Assets {
         $output['enable_logging'] = true;
     }
 
+    
+    if (!empty($input['async_css'])) {
+    $output['async_css'] = true;
+    }
+
+  
     // Process exclude lists
     if (!empty($input['exclude_css'])) {
         $value = $input['exclude_css'];
@@ -268,51 +275,59 @@ class WP_Minify_Assets {
   
 
     public function minify_style_tag($tag, $handle, $href, $media) {
-        if (!$this->options['minify_css'] || !$this->should_minify('css', $handle)) {
-            return $tag;
-        }
-
-        if (strpos($href, site_url()) === false && !wp_http_validate_url($href)) {
-            return $tag;
-        }
-
-        $file_path = $this->get_local_path_from_url($href);
-        if (!$file_path || !file_exists($file_path)) {
-            return $tag;
-        }
-
-        try {
-            $minifier = new \MatthiasMullie\Minify\CSS($file_path);
-            $minified = $minifier->minify();
-            
-              // Convert relative paths to absolute paths
-        $minified = $this->convert_relative_paths($minified, $file_path);
-            
-            $cache_dir = WP_CONTENT_DIR . '/cache/wp-minify-assets/';
-            if (!file_exists($cache_dir)) {
-                wp_mkdir_p($cache_dir);
-            }
-            
-            $cache_file = $cache_dir . 'style-' . $handle . '-' . md5($minified) . '.min.css';
-            
-            if (!file_exists($cache_file)) {
-                file_put_contents($cache_file, $minified);
-            }
-            
-            $cache_url = content_url('/cache/wp-minify-assets/' . basename($cache_file));
-            $tag = str_replace($href, $cache_url, $tag);
-            
-            if ($this->options['enable_logging']) {
-                error_log('CSS minification completed for: ' . $handle . ' (' . $href . ')');
-            }
-        } catch (Exception $e) {
-            if ($this->options['enable_logging']) {
-                error_log('CSS minification error for ' . $handle . ': ' . $e->getMessage());
-            }
-        }
-
+    if (!$this->options['minify_css'] || !$this->should_minify('css', $handle)) {
         return $tag;
     }
+
+    if (strpos($href, site_url()) === false && !wp_http_validate_url($href)) {
+        return $tag;
+    }
+
+    $file_path = $this->get_local_path_from_url($href);
+    if (!$file_path || !file_exists($file_path)) {
+        return $tag;
+    }
+
+    try {
+        $minifier = new \MatthiasMullie\Minify\CSS($file_path);
+        $minified = $minifier->minify();
+
+        $minified = $this->convert_relative_paths($minified, $file_path);
+
+        $cache_dir = WP_CONTENT_DIR . '/cache/wp-minify-assets/';
+        if (!file_exists($cache_dir)) {
+            wp_mkdir_p($cache_dir);
+        }
+
+        $cache_file = $cache_dir . 'style-' . $handle . '-' . md5($minified) . '.min.css';
+        if (!file_exists($cache_file)) {
+            file_put_contents($cache_file, $minified);
+        }
+
+        $cache_url = content_url('/cache/wp-minify-assets/' . basename($cache_file));
+
+        // 🆕 Async CSS loading
+        if (!empty($this->options['async_css'])) {
+    $tag = "<link rel='preload' as='style' href='{$cache_url}' onload=\"this.onload=null;this.rel='stylesheet'\">";
+    $tag .= "<noscript><link rel='stylesheet' href='{$cache_url}'></noscript>";
+} else {
+    $tag = str_replace(array($href, '&' . parse_url($href, PHP_URL_QUERY)), $cache_url, $tag);
+}
+
+if ($this->options['enable_logging']) {
+    error_log('CSS minified: ' . $handle);
+}
+
+return $tag;
+    } catch (Exception $e) {
+        if ($this->options['enable_logging']) {
+            error_log('CSS minify error for ' . $handle . ': ' . $e->getMessage());
+        }
+    }
+
+    return $tag;
+}
+
     
   
   
